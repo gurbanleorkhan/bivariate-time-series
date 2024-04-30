@@ -1,0 +1,321 @@
+#clear variables and close windows
+rm(list=ls(all=TRUE))
+graphics.off()
+###########################################################
+
+#DATA IMPORT AND LIBRARIES
+mydata = ts(read.csv("IFXSDFDE.csv", header = T), frequency=1,start=1)
+library(fGarch)
+library(tseries)
+
+#########################################################################
+#IFX DATA
+P.IFX = mydata[,1];
+r.IFX = 100* diff(log(P.IFX))
+
+par(mfrow=c(2,1))
+plot(P.IFX, col="blue")
+plot(r.IFX,col="black")
+
+#########################################################################
+#IFX RETURNS ACF AND LJUNG-BOX TEST
+par(mfrow=c(1,1))
+acf(r.IFX,50, 
+    type=c("correlation","covariance","partial"),
+    plot = T, na.action=na.fail,demean=T)
+
+Box.test(r.IFX,1,type=c("Ljung-Box"),fitdf=0)
+
+#########################################################################
+#IFX DESCRIPTIVE STATISTICS
+y = r.IFX
+m.IFX =mean(y)
+m2.IFX = mean((y-m.IFX)^2)
+m3.IFX = mean((y-m.IFX)^3)
+m4.IFX = mean((y-m.IFX)^4)
+skew.IFX = m3.IFX/(sqrt(m2.IFX)^3)
+kurt.IFX = m4.IFX/(sqrt(m2.IFX)^4)
+jarque.bera.test(y)
+DStats.IFX = cbind(m.IFX,m2.IFX,m3.IFX,m4.IFX,skew.IFX,kurt.IFX)
+
+#########################################################################
+#IFX ABSOLUTE AND SQUARED RETURNS ACF
+par(mfrow=c(1,1))
+plot(abs(r.IFX),col="violet")
+
+par(mfrow=c(1,1))
+acf(abs(r.IFX),50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+par(mfrow=c(1,1))
+plot(r.IFX^2,col="violet")
+
+par(mfrow=c(1,1))
+acf(r.IFX^2,50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+Box.test(abs(r.IFX),1,type=c("Ljung-Box"),fitdf=0)
+
+par(mfrow=c(1,2))
+plot(r.IFX^2,col="violet")
+plot(abs(r.IFX),col="red")
+
+#########################################################################
+#SDF DATA (SAME PROCEDURES)
+P.SDF = mydata[,2];
+r.SDF = 100* diff(log(P.SDF))
+
+par(mfrow=c(2,1))
+plot(P.SDF,col="blue")
+plot(r.SDF,col="black")
+
+#########################################################################
+#SWA RETURNS ACF AND LJUNG-BOX TEST
+par(mfrow=c(1,1))
+acf(r.SDF,50, 
+    type=c("correlation","covariance","partial"),
+    plot = T, na.action=na.fail,demean=T)
+
+Box.test(r.SDF,1,type=c("Ljung-Box"),fitdf=0)
+
+#########################################################################
+#IFX DESCRIPTIVE STATISTICS
+g = r.SDF
+m.SDF =mean(g)
+m2.SDF = mean((g-m.SDF)^2)
+m3.SDF = mean((g-m.SDF)^3)
+m4.SDF = mean((g-m.SDF)^4)
+skew.SDF = m3.SDF/(sqrt(m2.SDF)^3)
+kurt.SDF = m4.SDF/(sqrt(m2.SDF)^4)
+jarque.bera.test(g)
+DStats.SDF = cbind(m.SDF,m2.SDF,m3.SDF,m4.SDF,skew.SDF,kurt.SDF)
+
+#########################################################################
+#SWA ABSOLUTE AND SQUARED RETURNS ACF
+par(mfrow=c(1,2))
+plot(abs(r.SDF),col="red")
+plot(r.SDF^2,col="black")
+
+par(mfrow=c(1,1))
+acf(abs(r.SDF),50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+par(mfrow=c(1,1))
+acf(r.SDF^2,50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+par(mfrow=c(1,1))
+plot(abs(r.SDF),col="red")
+
+par(mfrow=c(1,1))
+acf(abs(r.SDF),50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+par(mfrow=c(1,1))
+plot(r.SDF^2,col="violet")
+
+par(mfrow=c(1,1))
+acf(r.SDF^2,50,
+    type=c("correlation","covariance","partial"),
+    plot = TRUE, na.action=na.fail,demean=TRUE)
+
+Box.test(abs(r.SDF),1,type=c("Ljung-Box"),fitdf=0)
+
+#######################################################################
+#BIVARIATE TIME SERIES OF RETURNS
+R.tot=cbind(r.IFX,r.SDF) #returns matrix
+
+par(mfrow=c(1,1))
+plot(R.tot,col="black")
+
+par(mfrow=c(1,1))
+plot(r.IFX,r.SDF)
+
+cor(r.IFX,r.SDF) #correlation
+
+DStats = rbind(DStats.IFX,DStats.SDF) #descriptive statistics
+print(DStats) #print descriptive statistics
+
+#######################################################################
+#COVARIANCE MATRIX SPECTRAL DECOMPOSITION
+N = ncol(R.tot);
+Summary = summary(R.tot); #Useful descriptive statistics
+
+Cov = cov(R.tot); #covariance matrix
+Corr = cor(R.tot); #correlation matrix
+
+SpectralDec = eigen(Cov, symmetric=TRUE); #decomposition VLamdaV'
+EigenVe = SpectralDec$vectors; #eigenvectors
+EigenVa = SpectralDec$values; #eigenvalues
+
+par(mfrow=c(1,1))
+barplot(EigenVa) #scree plot
+
+ExplainedVariance = sum(EigenVa);
+MarginalExplanations = EigenVa/ExplainedVariance; #percentage of info
+
+DiagEigenVa = diag(EigenVa) #diagonal matrix Lambda of eigenvalues
+
+print(Cov - EigenVe %*% DiagEigenVa %*% t(EigenVe), digits = 3) #check: = null matrix
+print(EigenVe  %*%   t(EigenVe), digits = 3) #check: identity matrix
+print(t(EigenVe)  %*% EigenVe, digits = 3) #check: identity matrix
+
+#The following command gives a rank-2 approximation for Cov, that
+#in this case correspond to Cov because it is a 2x2 matrix.
+
+Approx.Cov = EigenVe[,1:2] %*% DiagEigenVa[1:2, 1:2] %*% t(EigenVe[,1:2])
+
+#######################################################################
+#O-Garch FACTORS
+
+eigenve1 = EigenVe[,1]; #first eigenvector
+eigenve2 = EigenVe[,2]; #second eigenvector
+
+f.Ts1 =  ts(as.matrix(R.tot) %*% eigenve1); #first eigenvector applied to bivariate series
+f.Ts2 =  ts(as.matrix(R.tot) %*% eigenve2); #second eigenvector applied to bivariate series
+f.Ts = ts(as.matrix(R.tot) %*% EigenVe); #eigenvector matrix applied to bivariate series
+
+par(mfrow=c(1,1))
+plot(f.Ts)
+
+cor(f.Ts1,f.Ts2) #check: =0
+var(f.Ts1) #check: = eigenva1
+cov(f.Ts) #check: diagonal matrix of eigenvalues
+
+par(mfrow=c(2,1))
+acf(f.Ts[,1]^2)     
+acf(f.Ts[,2]^2) #check: less accentuated (because has less information)
+
+#######################################################################
+#O-GARCH fitting
+n = dim(t(r.IFX))[2];
+t = 1:n; #time index
+
+ht.f.Ts = matrix(0, n, N); #empty storage matrix
+for (i in 1:N)
+{
+  fit = garchFit(~ garch(1,1), data = f.Ts[,i], trace = FALSE); #fit each GARCH equation
+  summary(fit); #summary results for each step
+  ht = volatility(fit, type = "h"); #pass to volatility
+  ht.f.Ts[,i] = ht;
+} #O-GARCH fitting algorithms
+
+ht.f.Ts = ts(ht.f.Ts); #set the time series
+
+par(mfrow=c(1,1))
+plot(ht.f.Ts,col="orange")
+
+###################################################################
+#VECH MODEL
+
+VECH.H_t =  matrix(0, N * (N+1)/2, n); #empty storage matrix
+for (t in 1:n)
+{
+  H_t = EigenVe %*% diag(ht.f.Ts[t,])  %*% t(EigenVe); #specify Ht according to O-GARCH
+  VECH.H_t[,t] = vech(H_t); 
+} 
+VECH.H_t = ts(t(VECH.H_t));
+
+#The following gives h_11 h_12 and h_22.
+par(mfrow=c(1,1))
+plot(VECH.H_t[, c(1,2,3)],col="orange");
+
+#The following gives the correlation between asset returns.
+par(mfrow=c(1,1))
+plot(VECH.H_t[, 2] /sqrt(VECH.H_t[, 1] * VECH.H_t[, 3]), col = 'red');
+
+write.csv(VECH.H_t,"VECH MATRIX.csv", eol="\n" ) #creates new database for matlab
+
+###################################################################
+#VALUE AT RISK (VaR), IFX returns
+
+#USING O-GARCH
+# Comparison between three specifications:
+# (A) ARCH(1) model
+fit10 = garchFit(~ garch(1,0), data =r.IFX, trace = FALSE)
+fit10
+# (B) Gaussian GARCH(1,1) model
+fit11 = garchFit(~ garch(1,1), data =r.IFX, trace = FALSE)
+fit11
+# (C) t-GARCH(1,1) model (with student-t residuals)
+fit11t = garchFit(~ garch(1,1), data =r.IFX, cond.dist = "std", trace = FALSE)
+fit11t
+
+###################################################################
+#CREATING NEW DATASET FOR MATLAB
+write.csv(fit11t@data,"IFX GARCH-FITTED RETURNS.csv", eol="\n" ); #for matlab
+###################################################################
+
+#following command provide a list of possible features,
+#ad example digit 13 for the qqplot, other commands for fitting evaluation.
+par(mfrow=c(1,1))
+plot(fit10)
+par(mfrow=c(1,1))
+plot(fit11)
+par(mfrow=c(1,1))
+plot(fit11t)
+
+predict(fit11t, n.ahead = 1, plot="T") #one step ahead prediction
+
+fit@fit$params$params;
+ht1 = VECH.H_t[, c(1)]
+
+mu = fit@fit$params$params[1]; # conditional mean
+df =  fit@fit$params$params[8]; # degrees of freedom
+DCC.VaR = -(mu+qt(0.05, df) *sqrt(ht1) /sqrt(df/(df-2)) )
+
+par(mfrow=c(1,1))
+plot(r.IFX) #IFX returns
+lines(-DCC.VaR,col= "red" ) #this add the threshold
+
+#USING EXPONENTIAL SMOOTHING
+
+Holt = HoltWinters(r.IFX^2, alpha = 0.06, gamma = FALSE, beta = FALSE)
+par(mfrow=c(1,1))
+plot(r.IFX^2)
+lines(fitted(Holt)[,1],col = 3)
+
+phialpha=qnorm(0.05) #normdistri^-(alpha)
+ES.VaR=-phialpha*sqrt(as.vector(fitted(Holt)[,1]))
+
+par(mfrow=c(1,1))
+plot(r.IFX)
+lines(-ES.VaR,col= "blue" )
+
+###################################################################
+#BACKTESTING
+
+#compare the two counters z,w, then choosing the best model.
+m = 500
+EN = 0.05*m 
+w = 0
+z = 0
+
+#USING DCC
+
+for (i in 1:m)
+{ 
+  if (r.IFX[n-i]< -DCC.VaR[n-i]) w=w+1 #this refresh the counter w
+}
+
+#USING EXPONENTIAL SMOOTHING
+
+for (i in 1:m)
+{ 
+  if (r.IFX[n-i]< -ES.VaR[n-i]) z=z+1 #this refresh the counter z
+}
+
+#########################
+w #violations (DCC)
+z #violations (ES)
+#########################
+
+#COMPARING THRESHOLDS
+par(mfrow=c(1,1))
+ts.plot(ES.VaR, col="blue")
+lines(DCC.VaR, col="red")

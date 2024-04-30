@@ -1,0 +1,571 @@
+clear, close all
+
+%% Data Selection
+rng(21091983); % Set birth date as a seed
+
+slc=randi(30,1,2);%19th in list=IFX.DE(Infineon Technologies AG)
+% & 27th=SDF.DE	K+S Aktiengesellschaft
+
+%% Impoting Data from yahoo finance 
+
+d1 = fetch(yahoo,'IFX.DE','Close','01/02/04','05/22/2015');
+d2 = fetch(yahoo,'SDF.DE','Close','01/02/04','05/22/2015');
+
+%% Merging and Preparation Data 
+
+fts1=fints(d1(:,1), d1(:,2),'IFX');
+fts2=fints(d2(:,1), d2(:,2),'SDF');
+fts=merge(fts1,fts2);
+P=fts2mat(fts,1);
+
+figure; subplot(2,1,1);plot(fts1);
+subplot(2,1,2);plot(fts2); hold off
+
+
+%find missing data
+i = find(isnan(P));
+
+%Remove any rows containing NaNs
+P(any(isnan(P),2),:) = [];
+
+Dates=P(:,1);
+P=P(:,2:3);
+
+R = price2ret(P); %Bivariate time series of returns
+n = length(R);    % sample size
+t =  1:n;         % time index, t
+figure;subplot(2,1,1);plot(t, R(:,1))        % IFX.DE
+legend('IFX daily return')
+subplot(2,1,2);plot(t, R(:,2))        % SDF.DE
+legend('SDF daily return')
+
+%% RETURNS AND ABSOLUTE RESIDUALS ACF
+figure;
+subplot(2,2,1);autocorr(R(:,1));title('ACF of IFX returns');
+subplot(2,2,2);autocorr(R(:,2));title('ACF of SDF returns');
+subplot(2,2,3);autocorr(abs(R(:,1)));title('ACF of absolute IFX returns');
+subplot(2,2,4);autocorr(abs(R(:,2)));title('ACF of absolute SDF returns');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% RETURNS AND ABSOLUTE RESIDUALS ACF
+figure;autocorr(R(:,1));title('IFX returns ACF');
+figure;autocorr(R(:,2));title('SDF returns ACF');
+figure;autocorr(abs(R(:,1)));title('IFX absolute returns ACF');
+figure;autocorr(abs(R(:,2)));title('SDF absolute returns ACF');
+%% RETURNS HISTOGRAMS
+figure;histfit(R(:,1));title('IFX returns histograms');
+xlabel('Returns');
+ylabel('Frequency');
+figure;histfit(R(:,2));title('SDF returns histograms');
+xlabel('Returns');
+ylabel('Frequency');
+%% BIVARIATE TS AND DEVOLATILIZED TS GARCH MODELLING
+N = size(R,2); %Number of columns
+GARCHpar = []; %Empty storage vector for garch parameters
+Rstar = []; %It will be filled with the devolatilised series
+McondSTD = []; %It will be filled with the cond std (sqrt(h_{ii,t}))
+for i=1:N
+    [coeff, STDresiduals, condSTD] = garch11_fit(R(:, i)); %GARCH fitting
+    Rstar = [Rstar  STDresiduals]; %Iterative filling of storage vector
+    McondSTD = [McondSTD  condSTD]; %Another iterative filling follows
+    GARCHpar = [GARCHpar; garchget(coeff, 'K') garchget(coeff, 'ARCH') garchget(coeff, 'GARCH')];
+end
+figure %Plot of prices and returns
+subplot(2,1,1); plot(t,Rstar); title('Standardized returns');
+subplot(2,1,2); plot(t,McondSTD); title('Conditional St Dev');
+%% DCC MODEL
+a =  (0.1); b=  (0.8);
+Qbar_start = cov(Rstar,1);
+[L,D] = ldl(Qbar_start);
+Lq = L * sqrt(D);
+vPsi_q = vech(Lq);
+vPsi0 = [log(a/(1-a)); log(b/(1-b)); vPsi_q];
+DCClik(Rstar, vPsi0);
+f  = @(vPsi)DCClik(Rstar, vPsi); % function 
+opts = optimset('Display','iter','TolX',1e-9,'TolFun',1e-9,...
+                'Diagnostics','off', 'MaxIter',10000, 'MaxFunEvals', 10000,...
+                'LargeScale', 'off', 'PlotFcns', @optimplotfval);
+[vPsi, fval, exitflag, output] = fminunc(f, vPsi0, opts);
+disp('Estimation results');
+[mloglik, Qbar, a, b] = DCClik(Rstar, vPsi);
+disp(['Parameter a: ', num2str(a)]);
+disp(['Parameter b: ', num2str(b)]);
+disp(['Matrix Qbar: ']);
+Qbar
+DCCvolatilities  = DCCvolatility(Rstar, Qbar, a, b);
+volatilityDCC = McondSTD.^2;
+%% DCC MODEL - PLOTS
+figure
+hold on
+subplot(3,1,1);plot(t,McondSTD(:,1).^2,'r') %standard deviation asset 1
+xlabel('Time t')
+ylabel('volatility')
+subplot(3,1,2);plot(t,DCCvolatilities(:,2).*McondSTD(:,1).*McondSTD(:,2),'r') %co-volatility
+axis([0 3000 0 0.02])
+xlabel('Time t')
+ylabel('volatility')
+subplot(3,1,3);plot(t,McondSTD(:,2).^2,'r') %standard deviation asset 2
+axis([0 3000 0 0.02])
+xlabel('Time t')
+ylabel('covolatility')
+hold off
+%% EWMA MODEL (SMOOTHING)
+lambda = 0.06;
+y1= R(:,1); %setting time series of returns
+y2= R(:,2);
+EWMA1 = filter(1,[1 -(1-lambda)],lambda*y1.^2); %setting EWMA for volatility 1
+EWMA12 = filter(1,[1 -(1-lambda)],lambda*y1.*y2); %setting EWMA for covolatility
+EWMA2 = filter(1,[1 -(1-lambda)],lambda*y2.^2); %setting EWMA for volatility 2
+%Correlation through EWMA
+EWMAcorr = EWMA12./sqrt(EWMA1.*EWMA2);
+%% EWMA MODEL - PLOT
+%Smoothed series 1
+figure
+hold on
+plot(t,y1.^2,'k');
+plot(t,EWMA1,'y','linewidth',1.5);
+xlabel('Time t')
+ylabel('Squared returns')
+legend('IFX squared returns','Filtered series')
+hold off
+%Smoothed series 2
+figure
+hold on
+plot(t,y2.^2,'k');
+plot(t,EWMA2,'y','linewidth',1.5);
+xlabel('Time t')
+ylabel('Squared returns')
+legend('SDF squared returns','Filtered series')
+hold off
+%Volatilities and co-volatility
+figure
+subplot(3,1,1);plot(t, EWMA1, 'b');
+xlabel('Time t')
+ylabel('Series 1')
+subplot(3,1,2);plot(t, EWMA12, 'b');
+xlabel('Time t')
+ylabel('Series 2')
+subplot(3,1,3);plot(t, EWMA2, 'b');
+xlabel('Time t')
+ylabel('Series 3')
+%% VECH MODEL
+%Import h11 h12 h22
+Ht_OGARCH=dlmread('VECH MATRIX.csv',',',1,1);
+h11 = Ht_OGARCH(:,1);
+h12 = Ht_OGARCH(:,2);
+h22 = Ht_OGARCH(:,3);
+%Correlation through OGARCH
+rho = h12./ sqrt(h11 .* h22);
+%% VECH MODEL - PLOT
+figure
+subplot(3,1,1);plot(t, h11,'color',[1 0.5 0]);
+xlabel('Time t')
+ylabel('Series 1')
+subplot(3,1,2);plot(t, h12,'color',[1 0.5 0]);
+xlabel('Time t')
+ylabel('Series 2')
+subplot(3,1,3);plot(t, h22,'color',[1 0.5 0]);
+xlabel('Time t')
+ylabel('Series 3')
+%% CORRELATION COMPARISON
+%Simultaneous comparison
+figure
+title('Correlation comparison between EWMA / O-GARCH / DCC')
+axis([0 n -1 1])
+xlabel('Time t')
+ylabel('\rho_{t}')
+hold on
+plot(t,EWMAcorr,'b','linewidth',1.5)
+plot(t,DCCvolatilities(:,2),'r','linewidth',1.5)
+plot(t,rho,'y','linewidth',1.5)
+legend('EWMA','DCC','O-GARCH','location','Southeast')
+hold off
+%Separated comparison
+figure
+subplot(3,1,1);
+plot(t,EWMAcorr,'b')
+title('Correlation from EWMA')
+axis([0 n -1 1])
+xlabel('Time t')
+ylabel('\rho_{t}')
+subplot(3,1,2);
+plot(t,DCCvolatilities(:,2),'r')
+title('Correlation from DCC')
+axis([0 n -1 1])
+xlabel('Time t')
+ylabel('\rho_{t}')
+subplot(3,1,3);
+plot(t,rho,'color',[1 0.5 0])
+title('Correlation from O-GARCH')
+axis([0 n -1 1])
+xlabel('Time t')
+ylabel('\rho_{t}')
+%% MSFE
+y1sq = y1.^2; %Squared returns
+y2sq = y2.^2;
+%MSFEs through DCC model
+DCC_h11 = volatilityDCC(:,1);
+DCC_h22 = volatilityDCC(:,2);
+DCC_MSFE1 = mean((y1sq-DCC_h11).^2);
+DCC_MSFE2 = mean((y2sq-DCC_h22).^2);
+%MSFEs through O-GARCH model
+OGARCH_h11 = Ht_OGARCH(:,1);
+OGARCH_h22 = Ht_OGARCH(:,3);
+OGARCH_MSFE1 = mean((y1sq-OGARCH_h11).^2);
+OGARCH_MSFE2 = mean((y2sq-OGARCH_h22).^2);
+%MSFEs through EXP.SMOOTHING
+ES_h11 = EWMA1;
+ES_h22 = EWMA2;
+ES_MSFE1 = mean((y1sq-ES_h11).^2);
+ES_MSFE2 = mean((y2sq-ES_h22).^2);
+MSFE_tot = [DCC_MSFE1,OGARCH_MSFE1,ES_MSFE1;DCC_MSFE2,OGARCH_MSFE2,ES_MSFE2];
+%% MAE
+%MAEs through DCC model
+DCC_MAE1 = mean(abs((y1sq-DCC_h11)));
+DCC_MAE2 = mean(abs((y2sq-DCC_h22)));
+%MAEs through O-GARCH model
+OGARCH_MAE1 = mean(abs((y1sq-OGARCH_h11)));
+OGARCH_MAE2 = mean(abs((y2sq-OGARCH_h22)));
+%MAEs through EXP.SMOOTHING
+ES_MAE1 = mean(abs((y1sq-ES_h11)));
+ES_MAE2 = mean(abs((y2sq-ES_h22)));
+MAE_tot = [DCC_MAE1,OGARCH_MAE1,ES_MAE1;DCC_MAE2,OGARCH_MAE2,ES_MAE2];
+%% MSFEs MAEs OUTPUT
+display('------------------------------------')
+display('----Mean Squared Forecast Errors----')
+display('------------------------------------')
+display(' |  DCC  |  O-GARCH  |  Exp.Sm.  |')
+MSFE_tot
+display('------------------------------------')
+display(' ')
+display(' ')
+%MAEs OUTPUT
+display('------------------------------------')
+display('--------Mean Absolute Errors--------')
+display('------------------------------------')
+display(' |  DCC  |  O-GARCH  |  Exp.Sm.  |')
+MAE_tot
+display('------------------------------------')
+display(' ')
+display(' ')
+mean_tot = [mean(y1sq-DCC_h11),mean(y1sq-OGARCH_h11),mean(y1sq-ES_h11);mean(y2sq-DCC_h22),mean(y2sq-OGARCH_h22),mean(y2sq-ES_h22)];
+std_tot = [std(y1sq-DCC_h11),std(y1sq-OGARCH_h11),std(y1sq-ES_h11);std(y2sq-DCC_h22),std(y2sq-OGARCH_h22),std(y2sq-ES_h22)];
+display('------------------------------------')
+display('-------------Error mean-------------')
+display('------------------------------------')
+display(' |  DCC  |  O-GARCH  |  Exp.Sm.  |')
+mean_tot
+display('------------------------------------')
+display(' ')
+display(' ')
+display('------------------------------------')
+display('-------------Errors STD-------------')
+display('------------------------------------')
+display(' |  DCC  |  O-GARCH  |  Exp.Sm.  |')
+std_tot
+display('------------------------------------')
+display(' ')
+display(' ')
+%% PREDICTION WITH GARCH(1,1)
+%Data specification
+r_IFX = R(:,1);
+r_IFX_est = R(1:end-500,1);
+%Parameters estimations
+[coeff, STDresiduals, condSTD] = garch11_fit(r_IFX_est);
+%Parameters selection from estimation summary
+alpha0_hat = coeff.K;
+alpha1_hat = coeff.ARCH;
+beta1_hat = coeff.GARCH;
+%Empty storage vectors
+h_hat = zeros(500,1);
+e = zeros(500,1);
+GARCH_squares = zeros(500,1);
+%First element before the FOR cycle
+h_hat(1) = (r_IFX(length(t)-500).^2) ;
+e(1) = (r_IFX(length(t)-500).^2)-h_hat(1);
+GARCH_squares(1) = e(1)^2;
+%FOR cycle, this fills the empty storage vectors and refresh the MSFE
+for i = 2:500
+   h_hat(i) = alpha0_hat + (alpha1_hat + beta1_hat)*h_hat(i-1); 
+   e(i) = ((r_IFX(length(t)-500+i)).^2) - h_hat(i);
+   GARCH_squares(i) = (e(i))^2;
+end
+GARCH_MSFE = mean(GARCH_squares);
+%% PREDICTION WITH EXPONENTIAL SMOOTHING
+%Storage vectors
+EWMA_h_hat = zeros(500,1);
+EWMA_e = zeros(500,1);
+EWMA_squares = zeros(500,1);
+%First elements before the FOR cycle
+EWMA_h_hat(1) = (r_IFX(length(t)-500).^2);
+EWMA_e(1) = (r_IFX(length(t)-500).^2)-EWMA_h_hat(1);
+EWMA_squares(1) = EWMA_e(1).^2;
+%FOR cycle, this fills the empty storage vectors and refresh the MSFE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%NOTICE THAT THE PARAMETERS ARE NOT ESTIMATED
+%BUT FOLLOW THE POLICY : LAMBDA = 0.06
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+for i = 2:500
+   EWMA_h_hat(i) = EWMA_h_hat(1); %alpha0=0 and (alpha1+beta1)=1.
+   EWMA_e(i) = ((r_IFX(length(t)-500+i)).^2) - EWMA_h_hat(i);
+   EWMA_squares(i) = (EWMA_e(i)).^2;
+end
+EWMA_MSFE = mean(EWMA_squares);
+%% PREDICTIONS COMPARISON
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Forecasts from GARCH(1,1)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);h_hat],'r')
+plot((r_IFX_est(1:end)).^2,'k');
+legend('GARCH(1,1) Forecast')
+ylim([0 .03])
+hold off
+%Comparison between forecast and observed values
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);h_hat],'r','linewidth',2)
+plot((r_IFX(1:end-500)).^2,'k');
+legend('GARCH(1,1) Forecast')
+ylim([0 .03])
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Forecasts from EWMA
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);EWMA_h_hat],'b','linewidth',2)
+plot((r_IFX(1:end-500)).^2,'k');
+legend('EWMA Forecast')
+ylim([0 .03])
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%General comparison
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+hold on
+axis([0 500 0 11]);
+plot(h_hat,'r','linewidth',2)
+plot(EWMA_h_hat,'b','linewidth',2)
+plot((r_IFX(end-500:end)).^2,'k');
+legend('GARCH(1,1) forecast','EWMA forecast','location','northwest')
+ylim([0 .03])
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%MSFE results
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+MSFEs = [GARCH_MSFE,EWMA_MSFE]
+display('------------------------------------')
+display('-------------MSFE-------------')
+display('------------------------------------')
+display(' | GARCH(1,1) | EWMA |')
+MSFEs
+display('------------------------------------')
+display(' ')
+display(' ')
+%% FITTING WITH GARCH(1,1)
+%Empty storage vectors
+h_hat_fit = zeros(500,1);
+e_fit = zeros(500,1);
+GARCH_squares_fit = zeros(500,1);
+%First element before the FOR cycle
+h_hat_fit(1) = (r_IFX(length(t)-500).^2) ;
+e_fit(1) = (r_IFX(length(t)-500).^2)-h_hat_fit(1);
+GARCH_squares_fit(1) = e_fit(1)^2;
+%FOR cycle, this fills the empty storage vectors and refresh the MSFE
+for i = 2:500
+   h_hat_fit(i) = alpha0_hat + alpha1_hat*((r_IFX(length(t)-500+i)).^2) + beta1_hat*h_hat_fit(i-1);
+   e_fit(i) = ((r_IFX(length(t)-500+i)).^2) - h_hat_fit(i);
+   GARCH_squares_fit(i) = (e_fit(i))^2;
+end
+GARCH_MSFE_fit = mean(GARCH_squares_fit);
+%% FITTING WITH EXPONENTIAL SMOOTHING
+%Empty storage vectors
+EWMA_h_hat_fit = zeros(500,1);
+EWMA_e_fit = zeros(500,1);
+EWMA_squares_fit = zeros(500,1);
+%First elements before the FOR cycle
+EWMA_h_hat_fit(1) = (r_IFX(length(t)-500).^2);
+EWMA_e_fit(1) = (r_IFX(length(t)-500).^2)-EWMA_h_hat_fit(1);
+EWMA_squares_fit(1) = EWMA_e_fit(1).^2;
+%FOR cycle, this fills the empty storage vectors and refresh the MSFE
+for i = 2:500
+   EWMA_h_hat_fit(i) = 0.06*((r_IFX(length(t)-500+i)).^2) + 0.94*h_hat_fit(i-1);   
+   EWMA_e_fit(i) = ((r_IFX(length(t)-500+i)).^2) - EWMA_h_hat_fit(i);
+   EWMA_squares_fit(i) = (EWMA_e_fit(i)).^2;
+end
+EWMA_MSFE_fit = mean(EWMA_squares_fit);
+%% FITTING COMPARISON
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Simulations from GARCH(1,1)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);h_hat_fit],'r')
+plot((r_IFX_est(1:end)).^2,'k');
+legend('GARCH(1,1) Forecast')
+ylim([0 .03])
+hold off
+%Comparison between simulated and observed values
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);h_hat_fit],'r','linewidth',2)
+plot((r_IFX(1:end-500)).^2,'k');
+legend('GARCH(1,1) Forecast')
+ylim([0 .03])
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Simulations from EWMA
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+xlabel('Time')
+ylabel('Squared Returns')
+hold on
+plot([nan(length(t)-501,1);EWMA_h_hat_fit],'b','linewidth',2)
+plot((r_IFX(1:end-500)).^2,'k');
+legend('EWMA Forecast')
+ylim([0 .03])
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%General comparison
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+figure
+hold on
+plot(EWMA_h_hat_fit,'b','linewidth',2)
+plot(h_hat_fit,'r','linewidth',2)
+legend('EWMA forecast','GARCH(1,1) forecast')
+hold off
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%MSFE results
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+MSFEs_fit = [GARCH_MSFE_fit,EWMA_MSFE_fit]
+display('------------------------------------')
+display('-------------MSFE-------------')
+display('------------------------------------')
+display(' | GARCH(1,1) | EWMA |')
+MSFEs_fit
+display('------------------------------------')
+display(' ')
+display(' ')
+%% PRINCIPAL COMPONENTS ANALYSIS
+%Specify the covariance matrix
+COV = cov(R(:,1),R(:,2));
+%Spectral decomposition
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Notice that MATLAB don't order the
+%eigenvalues, this was a manual operation.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+[Evectors Evalues] = eig(COV);
+fR1 = R*Evectors(:,2); %Factor series with eigenvector 66%
+fR2 = R*Evectors(:,1); %Factor series with eigenvector 34%
+fR = R*Evectors; %Factor series
+%Correlation between factors and returns
+FACTOR_CORR= [corr(fR1,R(:,1)),corr(fR1,R(:,2));corr(fR2,R(:,1)),corr(fR2,R(:,2))];
+display('---------------------------------------------')
+display('---CORRELATION BETWEEN FACTORS AND RETURNS---')
+display('---------------------------------------------')
+display('Factors by rows while returns by columns')
+FACTOR_CORR
+display('---------------------------------------------')
+%Covariance matrix between factors and returns
+cov(fR1,R(:,1));
+cov(fR2,R(:,2));
+%% PRINCIPAL COMPONENTS ANALYSIS - PLOT
+%Scatter plot of returns with eigenvectors
+figure
+axis([-0.6 0.6 -0.6 0.6])
+hold on
+plot(R(:,1),R(:,2),'.')
+plot([0,Evectors(2,1)],[0,Evectors(2,2)],'g-','linewidth',2)
+plot([0,Evectors(1,1)],[0,Evectors(1,2)],'y-','linewidth',2)
+xlabel('IFX returns')
+ylabel('SDF returns')
+legend('Observations','Eigenvector 66%','Eigenvector 33%')
+hold off
+%Scatter plot factor 66% and IFX returns
+figure
+axis([-0.6 0.6 -0.6 0.6])
+xlabel('Factor 66% explanation')
+ylabel('IFX returns')
+hold on
+plot(fR1,R(:,1),'.')
+hold off
+%Scatter plot factor 33% and SDF returns
+figure
+axis([-0.6 0.6 -0.6 0.6])
+xlabel('Factor 33% explanation')
+ylabel('SDF returns')
+hold on
+plot(fR2,R(:,2),'.')
+hold off
+%%
+%%%%%EXERCISE 4
+alpha=0.05;
+m=500;
+disp('alpha =0.05' )
+%one-step-ahead predictive distribution y_t+1|Yt is available
+%in closed form (ignoring parameter estimation), e.g. N(0; ht+1),
+
+%GARCH (1,1) 5% VaR
+%We calculate the 1-step-ahead GARCH (1,1) Volatilility distribution
+
+VaR_5_GARCH=-1.164*sqrt(volatilityDCC(end-(m-1):end,1));
+violations_G=R(end-(m-1):end,1)<VaR_5_GARCH;
+p_GARCH=sum(violations_G)/m
+
+if p_GARCH>alpha;
+disp('The GARCH VaR is downsizing risk of unexpected loss')
+elseif p_Garch==alpha
+disp('The GARCH VaR is representing perfectly the risk of unexpected loss');
+else
+disp('The GARCH VaR is upsizing risk of unexpected loss')
+end
+disp('------------------------------------------------------------')
+
+%Risk Metrics 5% VaR
+%We calculate the 1-step-ahead RiskMetrics (1,1) Volatilility distribution
+
+VaR_5_RM=-1.164*sqrt(EWMA1(end-(m-1):end,1));
+violations_R=R(end-(m-1):end,1)<VaR_5_RM;
+p_RM=sum(violations_R)/m
+
+if p_RM>0.05;
+disp('The Risk Metrics VaR is downsizing risk of unexpected loss')
+elseif p_RM==0.05
+disp('The Risk Metrics VaR is representing perfectly the risk of unexpected loss');
+else
+disp('The Risk Metrics is upsizing risk of unexpected loss')
+end
+disp('------------------------------------------------------------')
+
+figure;
+plot(t(end-(m-1):end),R(end-(m-1):end,1),'k');hold on;
+plot(t(end-(m-1):end),VaR_5_GARCH,'r');
+plot(t(end-(m-1):end),VaR_5_RM,'g');
+set(gca,'Xtick',t(end-m):100:t(end))
+%set(gca,'XtickLabel',datestr(t(end-m):100:t(end),2))
+xlim(([min(t(end-500:end)) max(t(end-m:end))])); 
+legend('IFX losses','GARCH VAR','RiskMetrics VaR','Location','SouthWest')
+ylim([min(R(end-499:end,1)) 0])
+hold off
+disp('------------------------------------------------------------')
+if abs(p_RM-alpha)>abs(p_GARCH-alpha);
+    disp('GARCH VaR performs better than EWMA VaR in assessing risk of unexpected losses');
+elseif p_RM==p_GARCH;
+     disp('The two models predict unexpected losses in the same way');
+else
+    disp('EWMA VaR performs better than GARCH VaR in assessing risk of unexpected losses');
+    
+end
+    %%
